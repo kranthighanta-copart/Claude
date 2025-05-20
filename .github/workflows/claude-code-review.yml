@@ -102,13 +102,13 @@ jobs:
           echo "PR_TITLE=$PR_TITLE" >> $GITHUB_ENV
           echo "PR_AUTHOR=$PR_AUTHOR" >> $GITHUB_ENV
           echo "TARGET_BRANCH=$TARGET_BRANCH" >> $GITHUB_ENV
-          echo "JIRA_API_KEY=${{ secrets.JIRA_API_KEY }}" >> $GITHUB_ENV
-          echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> $GITHUB_ENV
+          echo "JIRA_API_KEY=${{ secrets.jira-token }}" >> $GITHUB_ENV
+          echo "ANTHROPIC_API_KEY=${{ secrets.anthropic-api-key }}" >> $GITHUB_ENV
 
       - name: Add Jira MCP integration
         shell: bash
         run: |
-          cd .claude-review && claude mcp add jira -e JIRA_API_KEY=${{ secrets.JIRA_API_KEY }} -- npx -y @jira/mcp
+          cd .claude-review && claude mcp add jira -e JIRA_API_KEY=${{ secrets.jira-token }} -- npx -y @jira/mcp
           echo "Jira MCP integration added successfully"
 
       - name: Generate diff and prepare for review
