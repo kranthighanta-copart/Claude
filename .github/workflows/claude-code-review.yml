@@ -154,7 +154,7 @@ jobs:
 
           1. Understanding the PR context and intended changes from the PR title, description
           2. Looking for any Jira references in the PR description and commits (both ID formats like "YP-41221" and URLs like "https://jira.copart.com/browse/YP-41221")
-          3. Use the Jira mcp__jira__get-story tool to fetch details about any referenced stories. If you are able to retrieve the story details, indicate what stories you analyzed in your review (also indicate if no stories were found, or if stories were found but unable to be fetched [include why]).
+          3. Use the Jira mcp__jira__read_ticket tool to fetch details about any referenced stories. If you are able to retrieve the story details, indicate what stories you analyzed in your review (also indicate if no stories were found, or if stories were found but unable to be fetched [include why]).
           4. Analyzing the code changes (diff) to identify:
              - Bugs, logic errors, or potential issues
              - Security vulnerabilities
@@ -173,8 +173,8 @@ jobs:
           ## Accessing Jira Stories
           We use Jira as our ticketing system for assigning work.
           For any Jira stories you identify in the PR description or commit messages:
-          1. Extract the story ID (numeric portion)
-          2. Use the mcp__jira__get-story tool to get the details of the story
+          1. Extract the Jira ID (numeric portion)
+          2. Use the mcp__jira__read_ticket tool to get the details of the story
            (please indicate to the user if this process fails with specific details as to why) 
           3. Review the story requirements, description, and acceptance criteria
 
