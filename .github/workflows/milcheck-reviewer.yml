@@ -64,7 +64,7 @@ jobs:
     name: Run Claude Code Review
     needs: check-trigger
     if: needs.check-trigger.outputs.should-review == 'true'
-    uses: ./.github/workflows/claude-code-review.yml@main
+    uses: ./.github/workflows/claude-code-review.yml
     with:
       pr-number: ${{ fromJSON(needs.check-trigger.outputs.pr-number) }}
       head-sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.check-trigger.outputs.pr-head-sha || github.sha }}
