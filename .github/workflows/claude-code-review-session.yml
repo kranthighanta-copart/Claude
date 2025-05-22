@@ -46,6 +46,9 @@ on:
       claude-subscription-password:
         required: true
         description: "Claude subscription account password"
+      session-token:
+        required: true
+        description: "Session Token"
 
 permissions:
   issues: write
