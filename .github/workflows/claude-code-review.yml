@@ -40,9 +40,6 @@ on:
       jira-token:
         required: true
         description: "Jira API token"
-      anthropic-api-key:
-        required: true
-        description: "Anthropic API key"
 
 permissions:
   issues: write
@@ -74,6 +71,12 @@ jobs:
           npm install -g @anthropic-ai/claude-code@0.2.74
           echo "Claude Code installed successfully"
 
+      - name: Login to Claude
+        shell: bash
+        run: |
+          claude login
+          echo "Claude login completed"
+
       - name: Create review directories
         shell: bash
         run: |
@@ -103,7 +106,6 @@ jobs:
           echo "PR_AUTHOR=$PR_AUTHOR" >> $GITHUB_ENV
           echo "TARGET_BRANCH=$TARGET_BRANCH" >> $GITHUB_ENV
           echo "JIRA_API_KEY=${{ secrets.jira-token }}" >> $GITHUB_ENV
-          echo "ANTHROPIC_API_KEY=${{ secrets.anthropic-api-key }}" >> $GITHUB_ENV
 
       - name: Add Jira MCP integration
         shell: bash
