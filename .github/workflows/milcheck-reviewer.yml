@@ -76,6 +76,8 @@ jobs:
     secrets:
       github-token: ${{ secrets.GITHUB_TOKEN }}
       jira-token: ${{ secrets.JIRA_API_TOKEN }}
+      claude-subscription-email: kranthirani.ghanta@gmail.com
+      claude-subscription-password: Mayabazar$123
     permissions: 
       issues: write
       pull-requests: write 
