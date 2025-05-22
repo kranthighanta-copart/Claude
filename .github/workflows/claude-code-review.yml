@@ -77,9 +77,17 @@ jobs:
       - name: Setup Claude Authentication
         shell: bash
         run: |
-          # Set up Claude session token for subscription-based authentication
-          export CLAUDE_SESSION_TOKEN="${{ secrets.claude-session-token }}"
-          echo "Claude session token configured"
+          # Create Claude config directory and set up authentication
+          mkdir -p ~/.config/claude-code
+          
+          # Create config with session token
+          cat > ~/.config/claude-code/config.json << EOF
+          {
+            "sessionToken": "${{ secrets.claude-session-token }}"
+          }
+          EOF
+          
+          echo "Claude authentication configured with session token"
 
       - name: Create review directories
         shell: bash
