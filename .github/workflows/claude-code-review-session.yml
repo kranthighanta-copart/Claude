@@ -46,9 +46,6 @@ on:
       claude-subscription-password:
         required: true
         description: "Claude subscription account password"
-      session-token:
-        required: true
-        description: "Session Token"
 
 permissions:
   issues: write
@@ -93,7 +90,7 @@ jobs:
           cat > auth_claude.exp << 'EOF'
           #!/usr/bin/expect -f
           
-          set timeout 30
+          set timeout 60
           set email [lindex $argv 0]
           set password [lindex $argv 1]
           
@@ -110,6 +107,9 @@ jobs:
               "Email:" {
                   send "$email\r"
               }
+              "email:" {
+                  send "$email\r"
+              }
               timeout {
                   puts "Error: Timeout waiting for email prompt"
                   exit 1
@@ -121,15 +121,26 @@ jobs:
               "Password:" {
                   send "$password\r"
               }
+              "password:" {
+                  send "$password\r"
+              }
               timeout {
                   puts "Error: Timeout waiting for password prompt"
                   exit 1
               }
           }
           
-          # Wait for successful authentication
+          # Wait for successful authentication or handle potential prompts
           expect {
               "Successfully authenticated" {
+                  puts "Authentication successful"
+                  exit 0
+              }
+              "Authentication successful" {
+                  puts "Authentication successful"
+                  exit 0
+              }
+              "Logged in successfully" {
                   puts "Authentication successful"
                   exit 0
               }
@@ -141,6 +152,10 @@ jobs:
                   puts "Error: Authentication failed"
                   exit 1
               }
+              "incorrect" {
+                  puts "Error: Incorrect credentials"
+                  exit 1
+              }
               timeout {
                   puts "Error: Timeout during authentication"
                   exit 1
@@ -150,22 +165,25 @@ jobs:
           
           # Install expect if not available
           if ! command -v expect &> /dev/null; then
+              echo "Installing expect..."
               sudo apt-get update && sudo apt-get install -y expect
           fi
           
           chmod +x auth_claude.exp
           
-          # Run authentication
+          # Run authentication with verbose output
+          echo "Running Claude authentication..."
           if ./auth_claude.exp "${CLAUDE_EMAIL}" "${CLAUDE_PASSWORD}"; then
               echo "Claude authentication completed successfully"
           
               # Verify config file exists and extract token
               if [ -f ~/.config/claude-code/config.json ]; then
+                  echo "Config file found, extracting session token..."
                   SESSION_TOKEN=$(jq -r '.sessionToken // .sessionKey // .token // .session_token' ~/.config/claude-code/config.json 2>/dev/null)
                   if [[ -n "${SESSION_TOKEN}" && "${SESSION_TOKEN}" != "null" && "${SESSION_TOKEN}" != "" ]]; then
                       echo "SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
                       echo "auth_status=success" >> $GITHUB_OUTPUT
-                      echo "Session token extracted and stored"
+                      echo "Session token extracted and stored successfully"
                   else
                       echo "Warning: Authentication succeeded but no valid session token found"
                       echo "Config file contents:"
@@ -175,6 +193,8 @@ jobs:
                   fi
               else
                   echo "Warning: Claude config file not found at ~/.config/claude-code/config.json"
+                  echo "Checking if authentication created config elsewhere..."
+                  find ~/ -name "config.json" -path "*claude*" 2>/dev/null || echo "No Claude config files found"
                   # Still mark as success since Claude auth login succeeded
                   echo "auth_status=success" >> $GITHUB_OUTPUT
               fi
@@ -206,7 +226,8 @@ jobs:
             # Check if config already exists from previous auth step
             if [ -f ~/.config/claude-code/config.json ]; then
               echo "Using existing Claude configuration from authentication step"
-              cat ~/.config/claude-code/config.json
+              # Don't show the full config for security, just confirm it exists
+              echo "Config file exists and is readable"
             else
               echo "Warning: No session token available and no existing config found"
               echo "Claude Code may attempt to use cached credentials or prompt for authentication"

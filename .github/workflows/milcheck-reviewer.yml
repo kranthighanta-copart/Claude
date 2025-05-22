@@ -1,8 +1,7 @@
 name: Claude Code Reviewer
-
 on:
   pull_request:
-    types: [opened, reopened]
+    types: [opened, reopened, synchronize]  # Added synchronize for new commits
   issue_comment:
     types: [created]
 
@@ -14,8 +13,8 @@ jobs:
       should-review: ${{ steps.set-output.outputs.should-review }}
       pr-number: ${{ steps.set-output.outputs.pr-number }}
       pr-head-sha: ${{ steps.fetch-pr-data.outputs.head_sha }}
-      use-voice: ${{ steps.set-output.outputs.use-voice }} # Add output for voice flag
-    
+      use-voice: ${{ steps.set-output.outputs.use-voice }}
+
     steps:
       - name: Check trigger conditions
         id: set-output
@@ -23,43 +22,61 @@ jobs:
           # Default values
           echo "should-review=false" >> $GITHUB_OUTPUT
           echo "pr-number=0" >> $GITHUB_OUTPUT
-          echo "use-voice=false" >> $GITHUB_OUTPUT # Default voice flag to false
+          echo "use-voice=false" >> $GITHUB_OUTPUT
           
           # Check if PR event
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             echo "should-review=true" >> $GITHUB_OUTPUT
             echo "pr-number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+            echo "Triggered by PR event: ${{ github.event.action }}"
           fi
           
           # Check if comment event with trigger phrase on a PR
-          # Check if comment event on a PR
           if [[ "${{ github.event_name }}" == "issue_comment" && -n "${{ github.event.issue.pull_request }}" ]]; then
-            # Check if the comment body contains the trigger phrase using a here string for robustness
-            if grep -q "@milcheck review" <<< "${{ github.event.comment.body }}"; then
+            COMMENT_BODY="${{ github.event.comment.body }}"
+          
+            # Check if the comment body contains the trigger phrase
+            if grep -q "@milcheck review" <<< "$COMMENT_BODY"; then
               echo "should-review=true" >> $GITHUB_OUTPUT
               echo "pr-number=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
-              # Check for the "Praise Kier!" voice flag within the same comment check
-              if grep -q "@milcheck review, praise Kier!" <<< "${{ github.event.comment.body }}"; then
-                 echo "use-voice=true" >> $GITHUB_OUTPUT
-                 echo "Milchick voice requested. Praise Kier!"
+              echo "Triggered by comment from ${{ github.event.comment.user.login }}"
+          
+              # Check for the "Praise Kier!" voice flag
+              if grep -q "@milcheck review, praise Kier!" <<< "$COMMENT_BODY"; then
+                echo "use-voice=true" >> $GITHUB_OUTPUT
+                echo "Milchick voice requested. Praise Kier!"
               fi
+            else
+              echo "Comment does not contain trigger phrase"
             fi
           fi
-      
+
       - name: Fetch PR data for comment trigger
         id: fetch-pr-data
         if: github.event_name == 'issue_comment' && github.event.issue.pull_request != '' && contains(github.event.comment.body, '@milcheck review')
         run: |
+          echo "Fetching PR data for comment trigger..."
+          
           # Fetch PR details to get the latest head SHA
           PR_DATA=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.issue.number }}")
           
+          if [ -z "$PR_DATA" ]; then
+            echo "Error: Failed to fetch PR data"
+            exit 1
+          fi
+          
           # Extract head SHA
           HEAD_SHA=$(echo "$PR_DATA" | jq -r .head.sha)
           
-          # Output the head SHA
+          if [ "$HEAD_SHA" = "null" ] || [ -z "$HEAD_SHA" ]; then
+            echo "Error: Could not extract head SHA from PR data"
+            exit 1
+          fi
+          
+          echo "Head SHA: $HEAD_SHA"
           echo "head_sha=$HEAD_SHA" >> $GITHUB_OUTPUT
-  
+
   run-review:
     name: Run Claude Code Review
     needs: check-trigger
@@ -72,14 +89,13 @@ jobs:
       repository: ${{ github.repository }}
       trigger-phrase: '@milcheck'
       max-files: 30
-      use-milchick-voice: ${{ needs.check-trigger.outputs.use-voice == 'true' }} # Pass the voice flag input
+      use-milchick-voice: ${{ needs.check-trigger.outputs.use-voice == 'true' }}
     secrets:
       github-token: ${{ secrets.GITHUB_TOKEN }}
       jira-token: ${{ secrets.JIRA_API_TOKEN }}
       claude-subscription-email: ${{ secrets.CLAUDE_EMAIL }}
       claude-subscription-password: ${{ secrets.CLAUDE_PASSWORD }}
-      session-token: ${{ secrets.SESSION_TOKEN }}
-    permissions: 
+    permissions:
       issues: write
-      pull-requests: write 
+      pull-requests: write
       contents: read
