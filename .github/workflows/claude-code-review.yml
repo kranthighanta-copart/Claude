@@ -40,12 +40,12 @@ on:
       jira-token:
         required: true
         description: "Jira API token"
-      claude-subscription-email:
-        required: true
-        description: "Claude subscription account email"
-      claude-subscription-password:
-        required: true
-        description: "Claude subscription account password"
+#      claude-subscription-email:
+#        required: true
+#        description: "Claude subscription account email"
+#      claude-subscription-password:
+#        required: true
+#        description: "Claude subscription account password"
 
 permissions:
   issues: write
