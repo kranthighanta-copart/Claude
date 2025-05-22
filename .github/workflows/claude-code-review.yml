@@ -81,34 +81,164 @@ jobs:
         id: claude-auth
         shell: bash
         env:
-          CLAUDE_EMAIL: kranthiranighanta@gmail.com
-          CLAUDE_PASSWORD: Mayabazar$123
+          CLAUDE_EMAIL: ${{ secrets.claude-subscription-email }}
+          CLAUDE_PASSWORD: ${{ secrets.claude-subscription-password }}
         run: |
           # Authenticate with Claude using subscription credentials
           echo "Authenticating with Claude subscription account..."
           
-          # Login to Claude and extract session token
-          SESSION_RESPONSE=$(curl -s -X POST "https://claude.ai/api/auth/login" \
-            -H "Content-Type: application/json" \
-            -H "User-Agent: Mozilla/5.0 (compatible; GitHub-Actions)" \
-            -d "{
-              \"email\": \"${CLAUDE_EMAIL}\",
-              \"password\": \"${CLAUDE_PASSWORD}\"
-            }")
+          # Create a temporary script for Claude authentication
+          cat > auth_claude.js << 'EOF'
+          const https = require('https');
+          const querystring = require('querystring');
           
-          # Extract session token from response
-          SESSION_TOKEN=$(echo "${SESSION_RESPONSE}" | jq -r '.sessionToken // .token // .access_token')
+          const email = process.env.CLAUDE_EMAIL;
+          const password = process.env.CLAUDE_PASSWORD;
           
-          if [[ -z "${SESSION_TOKEN}" || "${SESSION_TOKEN}" == "null" ]]; then
+          if (!email || !password) {
+            console.error('Missing email or password');
+            process.exit(1);
+          }
+          
+          // First, get the login page to extract any required tokens
+          const getLoginPage = () => {
+            return new Promise((resolve, reject) => {
+              const options = {
+                hostname: 'claude.ai',
+                path: '/login',
+                method: 'GET',
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
+                }
+              };
+          
+              const req = https.request(options, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => resolve({ data, headers: res.headers }));
+              });
+          
+              req.on('error', reject);
+              req.end();
+            });
+          };
+          
+          // Perform login
+          const login = async () => {
+            try {
+              const loginPage = await getLoginPage();
+          
+              const postData = JSON.stringify({
+                email_address: email,
+                password: password
+              });
+          
+              const options = {
+                hostname: 'claude.ai',
+                path: '/api/auth/human/login',
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Content-Length': Buffer.byteLength(postData),
+                  'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+                  'Accept': 'application/json',
+                  'Origin': 'https://claude.ai',
+                  'Referer': 'https://claude.ai/login'
+                }
+              };
+          
+              const req = https.request(options, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                  try {
+                    const response = JSON.parse(data);
+          
+                    // Extract session token from cookies or response
+                    const cookies = res.headers['set-cookie'];
+                    let sessionToken = null;
+          
+                    if (cookies) {
+                      for (const cookie of cookies) {
+                        const match = cookie.match(/sessionKey=([^;]+)/);
+                        if (match) {
+                          sessionToken = match[1];
+                          break;
+                        }
+                      }
+                    }
+          
+                    // Also check response body for token
+                    if (!sessionToken && response.sessionKey) {
+                      sessionToken = response.sessionKey;
+                    }
+          
+                    if (sessionToken) {
+                      console.log(`SESSION_TOKEN=${sessionToken}`);
+                      process.exit(0);
+                    } else {
+                      console.error('No session token found in response');
+                      console.error('Response:', data);
+                      process.exit(1);
+                    }
+                  } catch (e) {
+                    console.error('Failed to parse response:', e.message);
+                    console.error('Raw response:', data);
+                    process.exit(1);
+                  }
+                });
+              });
+          
+              req.on('error', (error) => {
+                console.error('Request error:', error.message);
+                process.exit(1);
+              });
+          
+              req.write(postData);
+              req.end();
+          
+            } catch (error) {
+              console.error('Login error:', error.message);
+              process.exit(1);
+            }
+          };
+          
+          login();
+          EOF
+          
+          # Run the authentication script
+          AUTH_RESULT=$(node auth_claude.js)
+          
+          if [[ $AUTH_RESULT =~ SESSION_TOKEN=(.+) ]]; then
+            SESSION_TOKEN="${BASH_REMATCH[1]}"
+            echo "SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
+            echo "Claude authentication successful"
+            echo "auth_status=success" >> $GITHUB_OUTPUT
+          else
             echo "Error: Failed to obtain Claude session token"
-            echo "Response: ${SESSION_RESPONSE}"
+            echo "Auth result: $AUTH_RESULT"
+          
+            # Fallback: Try using Claude Code's built-in authentication
+            echo "Attempting fallback authentication method..."
+            if claude auth login --email="${CLAUDE_EMAIL}" --password="${CLAUDE_PASSWORD}" 2>/dev/null; then
+              # Extract token from Claude Code config
+              if [ -f ~/.config/claude-code/config.json ]; then
+                SESSION_TOKEN=$(jq -r '.sessionToken // .sessionKey // .token' ~/.config/claude-code/config.json 2>/dev/null)
+                if [[ -n "${SESSION_TOKEN}" && "${SESSION_TOKEN}" != "null" ]]; then
+                  echo "SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
+                  echo "Claude authentication successful via fallback"
+                  echo "auth_status=success" >> $GITHUB_OUTPUT
+                  exit 0
+                fi
+              fi
+            fi
+          
+            echo "All authentication methods failed"
             exit 1
           fi
           
-          # Store token securely
-          echo "SESSION_TOKEN=${SESSION_TOKEN}" >> $GITHUB_ENV
-          echo "Claude authentication successful"
-          echo "auth_status=success" >> $GITHUB_OUTPUT
+          # Cleanup
+          rm -f auth_claude.js
 
       - name: Setup Claude Authentication
         shell: bash
