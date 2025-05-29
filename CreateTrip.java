@@ -1,6 +1,9 @@
 public class CreateTrip {
     // test
     public static void main(String[] args) {
-        System.out.println("Tow type changed to Heavy");
+        int a =2;
+        int b = 2;
+        a = b;
+        System.out.println("Tow type changed to Heavy" + a);
     }
 }
