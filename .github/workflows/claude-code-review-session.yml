@@ -40,9 +40,9 @@ on:
       jira-token:
         required: true
         description: "Jira API token"
-      anthropic-api-key:
+      claude-session-token:
         required: true
-        description: "Anthropic API key"
+        description: "Claude session token from manual login"
 
 permissions:
   issues: write
@@ -74,6 +74,30 @@ jobs:
           npm install -g @anthropic-ai/claude-code@0.2.74
           echo "Claude Code installed successfully"
 
+      # - name: Setup Claude Authentication
+      #   shell: bash
+      #   env:
+      #     CLAUDE_SESSION_TOKEN: ${{ secrets.claude-session-token }}
+      #   run: |
+      #     # Create Claude config directory
+      #     mkdir -p ~/.config/claude-code
+          
+      #     # Create config with the session token
+      #     cat > ~/.config/claude-code/config.json << EOF
+      #     {
+      #       "sessionToken": "${CLAUDE_SESSION_TOKEN}"
+      #     }
+      #     EOF
+          
+      #     echo "Claude authentication configured with session token"
+          
+      #     # Verify the config was created successfully
+      #     if [ -f ~/.config/claude-code/config.json ]; then
+      #       echo "Config file created successfully"
+      #     else
+      #       echo "Error: Failed to create config file"
+      #       exit 1
+      #     fi
 
       - name: Create review directories
         shell: bash
@@ -104,7 +128,6 @@ jobs:
           echo "PR_AUTHOR=$PR_AUTHOR" >> $GITHUB_ENV
           echo "TARGET_BRANCH=$TARGET_BRANCH" >> $GITHUB_ENV
           echo "JIRA_API_KEY=${{ secrets.jira-token }}" >> $GITHUB_ENV
-          echo "ANTHROPIC_API_KEY=${{ secrets.anthropic-api-key }}" >> $GITHUB_ENV
 
       - name: Add Jira MCP integration
         shell: bash
