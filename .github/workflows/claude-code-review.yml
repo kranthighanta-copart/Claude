@@ -68,12 +68,6 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install Claude Code
-        shell: bash
-        run: |
-          npm install -g @anthropic-ai/claude-code@0.2.74
-          echo "Claude Code installed successfully"
-
       - name: Create review directories
         shell: bash
         run: |
@@ -92,6 +86,7 @@ jobs:
           fi
 
           PR_TITLE=$(echo "$PR_INFO" | jq -r .title)
+          PR_DESCRIPTION=$(echo "$PR_INFO" | jq -r .body)
           PR_AUTHOR=$(echo "$PR_INFO" | jq -r .user.login)
           TARGET_BRANCH="${{ inputs.base-branch }}"
           
@@ -100,16 +95,11 @@ jobs:
           
           # Set environment variables
           echo "PR_TITLE=$PR_TITLE" >> $GITHUB_ENV
+          echo "PR_DESCRIPTION<<EOF" >> $GITHUB_ENV
+          echo "$PR_DESCRIPTION" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
           echo "PR_AUTHOR=$PR_AUTHOR" >> $GITHUB_ENV
           echo "TARGET_BRANCH=$TARGET_BRANCH" >> $GITHUB_ENV
-          echo "JIRA_API_KEY=${{ secrets.jira-token }}" >> $GITHUB_ENV
-          echo "ANTHROPIC_API_KEY=${{ secrets.anthropic-api-key }}" >> $GITHUB_ENV
-
-      - name: Add Jira MCP integration
-        shell: bash
-        run: |
-          cd .claude-review && claude mcp add jira -e JIRA_API_KEY=${{ secrets.jira-token }} -- npx -y @jira/mcp
-          echo "Jira MCP integration added successfully"
 
       - name: Generate diff and prepare for review
         shell: bash
@@ -134,91 +124,249 @@ jobs:
             echo "Reviewing all $TOTAL_FILES changed files"
           fi
           
-          # For each file to review, get its content
-          while IFS= read -r file; do
-            if [ -f "$file" ]; then
-              mkdir -p ".claude-review/$(dirname "$file")"
-              cp "$file" ".claude-review/$file"
-            fi
-          done < .claude-review/files-to-review.txt
+          # Get commit messages for Jira reference extraction
+          git log $COMMIT_BASE..HEAD --pretty=format:"%s%n%b" > .claude-review/commit-messages.txt
 
-      - name: Run Claude Code Review
+      - name: Extract Jira ticket information
         shell: bash
-        id: claude-review
+        env:
+          JIRA_TOKEN: ${{ secrets.jira-token }}
         run: |
-          # Create review prompt file
-          cat > .claude-review/prompt.md << 'EOF'
-          # Code Review Task
-
-          You are an expert code reviewer examining a pull request. Please perform a thorough code review by:
-
-          1. Understanding the PR context and intended changes from the PR title, description
-          2. Looking for any Jira references in the PR description and commits (both ID formats like "YP-41221" and URLs like "https://jira.copart.com/browse/YP-41221")
-          3. Use the Jira mcp__jira__read_ticket tool to fetch details about any referenced stories. If you are able to retrieve the story details, indicate what stories you analyzed in your review (also indicate if no stories were found, or if stories were found but unable to be fetched [include why]).
-          4. Analyzing the code changes (diff) to identify:
-             - Bugs, logic errors, or potential issues
-             - Security vulnerabilities
-             - Performance concerns
-             - Adherence to best practices and coding standards
-             - Completeness relative to the specifications
-             - Test coverage and quality
-          5. Providing constructive feedback with specific recommendations
+          # Create script to extract Jira tickets
+          cat > .claude-review/extract-jira.js << 'EOF'
+          const fs = require('fs');
+          const https = require('https');
           
-
-          ## PR Information
-          - Title: $PR_TITLE
-          - Author: $PR_AUTHOR
-          - Target Branch: $TARGET_BRANCH
-
-          ## Accessing Jira Stories
-          We use Jira as our ticketing system for assigning work.
-          For any Jira stories you identify in the PR description or commit messages:
-          1. Extract the Jira ID (numeric portion)
-          2. Use the mcp__jira__read_ticket tool to get the details of the story
-           (please indicate to the user if this process fails with specific details as to why) 
-          3. Review the story requirements, description, and acceptance criteria
-
-          ## Guidelines
-          - Be thorough but concise
-          - Highlight both issues and positive aspects
-          - Prioritize feedback (critical issues first)
-          - Provide specific examples and solutions when possible
-          - Consider the context of the changes and their purpose
-          - Focus on substance over style when possible
-
-          ## Final Output Format
-          Provide your review in markdown format with these sections:
-          1. **Summary** - Overall assessment and key points. Indicate what Jira stories were used to analyze this, if any.
-          2. **Recommendations** - Prioritized list of suggested changes
-          3. **Detailed Review** - Organized by file/component with specific line references
-          4. **Questions** - Any clarifications needed from the author
-
-          Keep your review constructive and professional.
+          // Read PR description and commit messages
+          const prDescription = process.env.PR_DESCRIPTION || '';
+          const commitMessages = fs.readFileSync('.claude-review/commit-messages.txt', 'utf8');
+          const allText = prDescription + '\n' + commitMessages;
+          
+          // Extract Jira ticket IDs (both formats: YP-12345 and URLs)
+          const jiraRegex = /(?:YP-\d+|https:\/\/jira\.copart\.com\/browse\/(YP-\d+))/g;
+          const matches = allText.match(jiraRegex) || [];
+          const ticketIds = [...new Set(matches.map(match => {
+            if (match.startsWith('https://')) {
+              return match.split('/').pop();
+            }
+            return match;
+          }))];
+          
+          console.log(`Found Jira tickets: ${ticketIds.join(', ')}`);
+          
+          if (ticketIds.length === 0) {
+            fs.writeFileSync('.claude-review/jira-tickets.json', JSON.stringify([]));
+            console.log('No Jira tickets found');
+            return;
+          }
+          
+          // Fetch ticket details
+          const jiraToken = process.env.JIRA_TOKEN;
+          const tickets = [];
+          
+          async function fetchTicket(ticketId) {
+            return new Promise((resolve, reject) => {
+              const options = {
+                hostname: 'jira.copart.com',
+                path: `/rest/api/2/issue/${ticketId}`,
+                method: 'GET',
+                headers: {
+                  'Authorization': `Bearer ${jiraToken}`,
+                  'Accept': 'application/json'
+                }
+              };
+          
+              const req = https.request(options, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                  if (res.statusCode === 200) {
+                    try {
+                      const ticket = JSON.parse(data);
+                      resolve({
+                        id: ticketId,
+                        summary: ticket.fields.summary,
+                        description: ticket.fields.description,
+                        status: ticket.fields.status.name,
+                        assignee: ticket.fields.assignee ? ticket.fields.assignee.displayName : 'Unassigned'
+                      });
+                    } catch (e) {
+                      reject(new Error(`Failed to parse response for ${ticketId}: ${e.message}`));
+                    }
+                  } else {
+                    reject(new Error(`HTTP ${res.statusCode} for ${ticketId}`));
+                  }
+                });
+              });
+          
+              req.on('error', reject);
+              req.end();
+            });
+          }
+          
+          // Fetch all tickets
+          for (const ticketId of ticketIds) {
+            try {
+              const ticket = await fetchTicket(ticketId);
+              tickets.push(ticket);
+              console.log(`Fetched: ${ticketId} - ${ticket.summary}`);
+            } catch (error) {
+              console.log(`Failed to fetch ${ticketId}: ${error.message}`);
+              tickets.push({
+                id: ticketId,
+                error: error.message
+              });
+            }
+          }
+          
+          fs.writeFileSync('.claude-review/jira-tickets.json', JSON.stringify(tickets, null, 2));
           EOF
-
-          # Conditionally add Milchick voice instruction
-          if [ "${{ inputs.use-milchick-voice }}" = "true" ]; then
-            echo "" >> .claude-review/prompt.md # Add a newline for separation
-            echo "Additionally, adopt the persona and voice of Seth Milchick from the TV show Severance for this review. Maintain his characteristic tone and mannerisms throughout your response." >> .claude-review/prompt.md
-            echo "Milchick voice enabled."
-          else
-             echo "Standard professional voice enabled."
-          fi
-
-          # Replace environment variables in the prompt
-          envsubst < .claude-review/prompt.md > .claude-review/prompt-filled.md
           
-          # Run Claude Code in non-interactive mode
-          echo "Starting Claude Code review process..."
+          # Run the Jira extraction script
+          cd .claude-review && node extract-jira.js
 
-          cd .claude-review && claude --allowedTools "mcp__jira__get-story" -p \
-            "read prompt-filled.md, then analyze the PR info in pr-info/pr-info.json and the code changes in pr-changes.diff. \
-            Examine each file listed in files-to-review.txt. \
-            If you identify any Jira references in the PR description or commit messages, use the Jira API \
-            to fetch the relevant story details for additional context. \
-            Then provide a comprehensive code review as specified in the prompt." > review-output.md
+      - name: Run Claude Code Review via API
+        shell: bash
+        env:
+          CLAUDE_API_KEY: ${{ secrets.anthropic-api-key }}
+        run: |
+          # Create the review script
+          cat > .claude-review/claude-review.js << 'EOF'
+          const fs = require('fs');
+          const https = require('https');
           
-          echo "Claude Code review completed"
+          const apiKey = process.env.CLAUDE_API_KEY;
+          
+          // Read all the review data
+          const prInfo = JSON.parse(fs.readFileSync('.claude-review/pr-info/pr-info.json', 'utf8'));
+          const diff = fs.readFileSync('.claude-review/pr-changes.diff', 'utf8');
+          const filesToReview = fs.readFileSync('.claude-review/files-to-review.txt', 'utf8').trim().split('\n').filter(f => f);
+          const jiraTickets = JSON.parse(fs.readFileSync('.claude-review/jira-tickets.json', 'utf8'));
+          
+          // Build the prompt
+          let prompt = `# Code Review Task
+          
+          You are an expert code reviewer examining a pull request. Please perform a thorough code review.
+          
+          ## PR Information
+          - Title: ${prInfo.title}
+          - Author: ${prInfo.user.login}
+          - Description: ${prInfo.body || 'No description provided'}
+          - Target Branch: ${process.env.TARGET_BRANCH}
+          - Files to review: ${filesToReview.length}
+          
+          ## Jira Context
+          `;
+          
+          if (jiraTickets.length > 0) {
+            prompt += `Found ${jiraTickets.length} related Jira ticket(s):\n`;
+            jiraTickets.forEach(ticket => {
+              if (ticket.error) {
+                prompt += `- ${ticket.id}: Error fetching details (${ticket.error})\n`;
+              } else {
+                prompt += `- ${ticket.id}: ${ticket.summary} (Status: ${ticket.status})\n`;
+                if (ticket.description) {
+                  prompt += `  Description: ${ticket.description.substring(0, 500)}...\n`;
+                }
+              }
+            });
+          } else {
+            prompt += 'No Jira tickets referenced in this PR.\n';
+          }
+          
+          prompt += `
+          ## Code Changes
+          Files changed: ${filesToReview.join(', ')}
+          
+          \`\`\`diff
+          ${diff}
+          \`\`\`
+          
+          ## Review Guidelines
+          Please analyze the code changes and provide:
+          1. **Summary** - Overall assessment and key points
+          2. **Recommendations** - Prioritized list of suggested changes
+          3. **Detailed Review** - Specific feedback organized by file/component
+          4. **Questions** - Any clarifications needed from the author
+          
+          Focus on:
+          - Bugs, logic errors, or potential issues
+          - Security vulnerabilities
+          - Performance concerns
+          - Best practices and coding standards
+          - Completeness relative to Jira requirements
+          - Test coverage and quality
+          
+          Keep your review constructive and professional.`;
+          
+          // Add Milchick voice if requested
+          if (process.env.USE_MILCHICK_VOICE === 'true') {
+            prompt += '\n\nAdditionally, adopt the persona and voice of Seth Milchick from the TV show Severance for this review. Maintain his characteristic tone and mannerisms throughout your response.';
+          }
+          
+          // Prepare API request
+          const requestBody = JSON.stringify({
+            model: 'claude-3-5-sonnet-20241022',
+            max_tokens: 4000,
+            messages: [{
+              role: 'user',
+              content: prompt
+            }]
+          });
+          
+          const options = {
+            hostname: 'api.anthropic.com',
+            path: '/v1/messages',
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': apiKey,
+              'anthropic-version': '2023-06-01',
+              'Content-Length': Buffer.byteLength(requestBody)
+            }
+          };
+          
+          // Make the API request
+          const req = https.request(options, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+              if (res.statusCode === 200) {
+                try {
+                  const response = JSON.parse(data);
+                  const review = response.content[0].text;
+                  fs.writeFileSync('.claude-review/review-output.md', review);
+                  console.log('Claude review completed successfully');
+                } catch (error) {
+                  console.error('Error parsing Claude response:', error);
+                  fs.writeFileSync('.claude-review/review-output.md', 'Error: Failed to parse Claude response');
+                  process.exit(1);
+                }
+              } else {
+                console.error(`Claude API error: ${res.statusCode}`);
+                console.error('Response:', data);
+                fs.writeFileSync('.claude-review/review-output.md', `Error: Claude API returned ${res.statusCode}`);
+                process.exit(1);
+              }
+            });
+          });
+          
+          req.on('error', (error) => {
+            console.error('Request error:', error);
+            fs.writeFileSync('.claude-review/review-output.md', 'Error: Failed to connect to Claude API');
+            process.exit(1);
+          });
+          
+          req.write(requestBody);
+          req.end();
+          EOF
+          
+          # Set environment variables for the script
+          export USE_MILCHICK_VOICE="${{ inputs.use-milchick-voice }}"
+          export TARGET_BRANCH="${{ inputs.base-branch }}"
+          
+          # Run the Claude review
+          cd .claude-review && node claude-review.js
 
       - name: Post review comment
         shell: bash
@@ -229,7 +377,7 @@ jobs:
 
           $(cat .claude-review/review-output.md)
           
-          <sub>This review was automatically generated by Claude Code. If you have feedback on this review, please let the maintainers know.</sub>"
+          <sub>This review was automatically generated by Claude API. If you have feedback on this review, please let the maintainers know.</sub>"
           
           # Post comment to PR
           RESPONSE=$(curl -s -X POST \
