@@ -137,89 +137,97 @@ jobs:
           const fs = require('fs');
           const https = require('https');
           
-          // Read PR description and commit messages
-          const prDescription = process.env.PR_DESCRIPTION || '';
-          const commitMessages = fs.readFileSync('.claude-review/commit-messages.txt', 'utf8');
-          const allText = prDescription + '\n' + commitMessages;
+          async function main() {
+            // Read PR description and commit messages
+            const prDescription = process.env.PR_DESCRIPTION || '';
+            const commitMessages = fs.readFileSync('.claude-review/commit-messages.txt', 'utf8');
+            const allText = prDescription + '\n' + commitMessages;
           
-          // Extract Jira ticket IDs (both formats: YP-12345 and URLs)
-          const jiraRegex = /(?:YP-\d+|https:\/\/jira\.copart\.com\/browse\/(YP-\d+))/g;
-          const matches = allText.match(jiraRegex) || [];
-          const ticketIds = [...new Set(matches.map(match => {
-            if (match.startsWith('https://')) {
-              return match.split('/').pop();
+            // Extract Jira ticket IDs (both formats: YP-12345 and URLs)
+            const jiraRegex = /(?:YP-\d+|https:\/\/jira\.copart\.com\/browse\/(YP-\d+))/g;
+            const matches = allText.match(jiraRegex) || [];
+            const ticketIds = [...new Set(matches.map(match => {
+              if (match.startsWith('https://')) {
+                return match.split('/').pop();
+              }
+              return match;
+            }))];
+          
+            console.log(`Found Jira tickets: ${ticketIds.join(', ')}`);
+          
+            if (ticketIds.length === 0) {
+              fs.writeFileSync('.claude-review/jira-tickets.json', JSON.stringify([]));
+              console.log('No Jira tickets found');
+              return;
             }
-            return match;
-          }))];
           
-          console.log(`Found Jira tickets: ${ticketIds.join(', ')}`);
+            // Fetch ticket details
+            const jiraToken = process.env.JIRA_TOKEN;
+            const tickets = [];
           
-          if (ticketIds.length === 0) {
-            fs.writeFileSync('.claude-review/jira-tickets.json', JSON.stringify([]));
-            console.log('No Jira tickets found');
-            return;
-          }
-          
-          // Fetch ticket details
-          const jiraToken = process.env.JIRA_TOKEN;
-          const tickets = [];
-          
-          async function fetchTicket(ticketId) {
-            return new Promise((resolve, reject) => {
-              const options = {
-                hostname: 'jira.copart.com',
-                path: `/rest/api/2/issue/${ticketId}`,
-                method: 'GET',
-                headers: {
-                  'Authorization': `Bearer ${jiraToken}`,
-                  'Accept': 'application/json'
-                }
-              };
-          
-              const req = https.request(options, (res) => {
-                let data = '';
-                res.on('data', chunk => data += chunk);
-                res.on('end', () => {
-                  if (res.statusCode === 200) {
-                    try {
-                      const ticket = JSON.parse(data);
-                      resolve({
-                        id: ticketId,
-                        summary: ticket.fields.summary,
-                        description: ticket.fields.description,
-                        status: ticket.fields.status.name,
-                        assignee: ticket.fields.assignee ? ticket.fields.assignee.displayName : 'Unassigned'
-                      });
-                    } catch (e) {
-                      reject(new Error(`Failed to parse response for ${ticketId}: ${e.message}`));
-                    }
-                  } else {
-                    reject(new Error(`HTTP ${res.statusCode} for ${ticketId}`));
+            function fetchTicket(ticketId) {
+              return new Promise((resolve, reject) => {
+                const options = {
+                  hostname: 'jira.copart.com',
+                  path: `/rest/api/2/issue/${ticketId}`,
+                  method: 'GET',
+                  headers: {
+                    'Authorization': `Bearer ${jiraToken}`,
+                    'Accept': 'application/json'
                   }
+                };
+          
+                const req = https.request(options, (res) => {
+                  let data = '';
+                  res.on('data', chunk => data += chunk);
+                  res.on('end', () => {
+                    if (res.statusCode === 200) {
+                      try {
+                        const ticket = JSON.parse(data);
+                        resolve({
+                          id: ticketId,
+                          summary: ticket.fields.summary,
+                          description: ticket.fields.description,
+                          status: ticket.fields.status.name,
+                          assignee: ticket.fields.assignee ? ticket.fields.assignee.displayName : 'Unassigned'
+                        });
+                      } catch (e) {
+                        reject(new Error(`Failed to parse response for ${ticketId}: ${e.message}`));
+                      }
+                    } else {
+                      reject(new Error(`HTTP ${res.statusCode} for ${ticketId}`));
+                    }
+                  });
                 });
-              });
           
-              req.on('error', reject);
-              req.end();
-            });
-          }
-          
-          // Fetch all tickets
-          for (const ticketId of ticketIds) {
-            try {
-              const ticket = await fetchTicket(ticketId);
-              tickets.push(ticket);
-              console.log(`Fetched: ${ticketId} - ${ticket.summary}`);
-            } catch (error) {
-              console.log(`Failed to fetch ${ticketId}: ${error.message}`);
-              tickets.push({
-                id: ticketId,
-                error: error.message
+                req.on('error', reject);
+                req.end();
               });
             }
+          
+            // Fetch all tickets
+            for (const ticketId of ticketIds) {
+              try {
+                const ticket = await fetchTicket(ticketId);
+                tickets.push(ticket);
+                console.log(`Fetched: ${ticketId} - ${ticket.summary}`);
+              } catch (error) {
+                console.log(`Failed to fetch ${ticketId}: ${error.message}`);
+                tickets.push({
+                  id: ticketId,
+                  error: error.message
+                });
+              }
+            }
+          
+            fs.writeFileSync('.claude-review/jira-tickets.json', JSON.stringify(tickets, null, 2));
           }
           
-          fs.writeFileSync('.claude-review/jira-tickets.json', JSON.stringify(tickets, null, 2));
+          // Run the main function
+          main().catch(error => {
+            console.error('Script failed:', error);
+            process.exit(1);
+          });
           EOF
           
           # Run the Jira extraction script
